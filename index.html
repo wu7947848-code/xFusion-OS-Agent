@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>xFusion OS-Agent 战术指挥台</title>
+    <!-- 引入专业轮子：Xterm.js 核心与样式 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --panel-bg: #161b22;
+            --text-main: #c9d1d9;
+            --neon-blue: #58a6ff;
+            --neon-green: #39ff14;
+            --neon-red: #ff4444;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Consolas', 'Courier New', monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--neon-blue);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+        }
+
+        .header h1 { margin: 0; color: var(--neon-blue); text-shadow: 0 0 10px rgba(88, 166, 255, 0.5); font-size: 24px; }
+        .status-badge { background: rgba(88, 166, 255, 0.1); border: 1px solid var(--neon-blue); padding: 5px 15px; border-radius: 20px; font-size: 14px; animation: pulse 2s infinite; }
+
+        .main-container { display: flex; flex: 1; gap: 20px; overflow: hidden; }
+
+        /* 左侧控制台保持极简科技风 */
+        .control-panel {
+            width: 300px; background: var(--panel-bg); border: 1px solid #30363d;
+            border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+
+        textarea {
+            width: 100%; height: 100px; background: #000; color: var(--neon-green);
+            border: 1px solid #30363d; padding: 10px; font-family: inherit; resize: none; box-sizing: border-box;
+        }
+        textarea:focus { outline: 1px solid var(--neon-blue); }
+
+        button {
+            background: transparent; color: var(--neon-blue); border: 1px solid var(--neon-blue);
+            padding: 12px; cursor: pointer; font-family: inherit; font-weight: bold; transition: all 0.3s;
+        }
+        button:hover { background: var(--neon-blue); color: #000; box-shadow: 0 0 15px var(--neon-blue); }
+
+        .quick-actions button {
+            display: block; width: 100%; margin-bottom: 10px; border-color: #30363d;
+            color: var(--text-main); font-size: 12px; text-align: left;
+        }
+        .quick-actions button:hover { border-color: var(--neon-green); color: var(--neon-green); background: transparent; box-shadow: none; }
+
+        /* 右侧容器交给 Xterm.js 接管 */
+        .terminal-container {
+            flex: 1; background: #000; border: 1px solid #30363d;
+            border-radius: 8px; padding: 10px; overflow: hidden;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+        }
+
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(88,166,255,0.4); } 70% { box-shadow: 0 0 0 10px rgba(88,166,255,0); } 100% { box-shadow: 0 0 0 0 rgba(88,166,255,0); } }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>xFusion // OS-Agent Mission Control</h1>
+        <div class="status-badge">● SYSTEM READY</div>
+    </div>
+
+    <div class="main-container">
+        <div class="control-panel">
+            <h3 style="margin-top:0; color: var(--neon-blue);">TARGET IDENTIFIED</h3>
+            <div style="font-size: 12px; color: #8b949e; margin-bottom: 15px;">IP: 172.20.10.8<br>OS: DGX OS / Linux</div>
+            <textarea id="taskInput" placeholder="输入自然语言指令..."></textarea>
+            <button onclick="executeTask()" id="execBtn">INITIATE SEQUENCE [Enter]</button>
+            <button onclick="authorizeExecution()" id="authBtn" style="display: none; border-color: var(--neon-red); color: var(--neon-red); margin-top: 10px;">
+                ⚠ AUTHORIZE EXECUTION [授权执行]
+            </button>
+            <div class="quick-actions" style="margin-top: 20px;">
+                <div style="font-size: 12px; color: #8b949e; margin-bottom: 10px;">> QUICK PROTOCOLS</div>
+                <button onclick="setTask('网站打不开了，查一下 80 端口是不是挂了')">[01] DIAGNOSE PORT 80</button>
+                <button onclick="setTask('分析当前系统负载并排查高危进程')">[02] CHECK SYSTEM LOAD</button>
+            </div>
+        </div>
+
+        <!-- Xterm.js 挂载点 -->
+        <div class="terminal-container" id="terminal-container"></div>
+    </div>
+
+    <script>
+        // 初始化 Xterm.js 终端
+        const term = new Terminal({
+            cursorBlink: true,
+            theme: { background: '#000000', foreground: '#39ff14' },
+            fontFamily: "'Consolas', 'Courier New', monospace",
+            fontSize: 14
+        });
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById('terminal-container'));
+        fitAddon.fit();
+
+        // 窗口大小变化时自动适配终端大小
+        window.addEventListener('resize', () => { fitAddon.fit(); });
+
+        // ANSI 颜色代码库 (赛博朋克的灵魂)
+        const colors = {
+            reset: "\x1b[0m",
+            dim: "\x1b[90m",
+            blue: "\x1b[1;34m",
+            green: "\x1b[1;32m",
+            yellow: "\x1b[1;33m",
+            red: "\x1b[1;31m",
+            white: "\x1b[1;37m",
+            cyan: "\x1b[1;36m"
+        };
+
+        // 打印开机动画
+        term.writeln(`${colors.blue}>>> xFusion OS-Agent Kernel v2.0 Initialized.${colors.reset}`);
+        term.writeln(`${colors.dim}Loading neural pathways... OK${colors.reset}`);
+
+        // 生成当前浏览器窗口的唯一标识 (UUID)
+        const sessionId = crypto.randomUUID ? crypto.randomUUID() : 'session-' + Math.random().toString(36).substring(2, 15);
+        term.writeln(`${colors.dim}>>> 审计防篡改协议已激活 | Session ID: ${sessionId}${colors.reset}\r\n`);
+        term.writeln(`${colors.green}Awaiting directive...${colors.reset}\r\n`);
+
+        const taskInput = document.getElementById('taskInput');
+        const execBtn = document.getElementById('execBtn');
+        const authBtn = document.getElementById('authBtn');
+
+        // 存放挂起的高危工具，等待用户授权后执行
+        // 🚀 漏洞修复：使用 sessionStorage 持久化，防止页面刷新 / 崩溃导致记忆丢失
+        function getPendingToolName() { return sessionStorage.getItem('pendingToolName') || ""; }
+        function setPendingToolName(v) { sessionStorage.setItem('pendingToolName', v); }
+        function getPendingToolParams() { const p = sessionStorage.getItem('pendingToolParams'); return p ? JSON.parse(p) : null; }
+        function setPendingToolParams(v) { sessionStorage.setItem('pendingToolParams', JSON.stringify(v)); }
+        function getPendingHistory() { return sessionStorage.getItem('pendingHistory') || ""; }
+        function setPendingHistory(v) { sessionStorage.setItem('pendingHistory', v); }
+        function clearPending() {
+            sessionStorage.removeItem('pendingToolName');
+            sessionStorage.removeItem('pendingToolParams');
+            sessionStorage.removeItem('pendingHistory');
+        }
+
+        // 页面加载时尝试恢复挂起状态（防止刷新导致记忆丢失）
+        if (getPendingToolName()) {
+            const recovered = confirm(`检测到上次未完成的授权任务: [${getPendingToolName()}]。\n点击"确定"恢复上次的挂起状态，点击"取消"清除。`);
+            if (recovered) {
+                pendingToolName = getPendingToolName();
+                pendingToolParams = getPendingToolParams();
+                pendingHistory = getPendingHistory();
+                showAuthButton();
+                term.writeln(`${colors.yellow}\r\n>>> [SYSTEM] 已恢复上次的挂起会话。点击【授权执行】继续。\r\n${colors.reset}`);
+            } else {
+                clearPending();
+            }
+        }
+
+        function setTask(text) { taskInput.value = text; }
+
+        async function executeTask() {
+            const task = taskInput.value.trim();
+            if (!task) return;
+
+            execBtn.disabled = true; execBtn.innerText = "EXECUTING...";
+            execBtn.style.color = "var(--neon-yellow)"; execBtn.style.borderColor = "var(--neon-yellow)";
+
+            term.writeln(`\r\n${colors.cyan}====================================================${colors.reset}`);
+            term.writeln(`${colors.blue}>>> USER DIRECTIVE: ${task}${colors.reset}`);
+            term.writeln(`${colors.cyan}====================================================${colors.reset}\r\n`);
+
+            try {
+                const response = await fetch('http://127.0.0.1:8080/api/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task: task, session_id: sessionId })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.substring(6);
+                            if (dataStr === '[DONE]') {
+                                term.writeln(`\r\n${colors.green}>>> [SYSTEM] CONNECTION TERMINATED.${colors.reset}\r\n`);
+                                break;
+                            }
+                            try { renderLog(JSON.parse(dataStr)); }
+                            catch (e) { console.error("Parse Error:", e); }
+                        }
+                    }
+                }
+            } catch (error) {
+                term.writeln(`\r\n${colors.red}[FATAL ERROR] API 通信失败: ${error.message}${colors.reset}\r\n`);
+            } finally {
+                execBtn.disabled = false; execBtn.innerText = "INITIATE SEQUENCE [Enter]";
+                execBtn.style.color = "var(--neon-blue)"; execBtn.style.borderColor = "var(--neon-blue)";
+            }
+        }
+
+        function showAuthButton() {
+            authBtn.style.display = 'block';
+        }
+
+        function hideAuthButton() {
+            authBtn.style.display = 'none';
+            pendingToolName = "";
+            pendingToolParams = null;
+            pendingHistory = "";
+            clearPending(); // 🚀 同时清除 sessionStorage
+        }
+
+        async function authorizeExecution() {
+            // 优先从 sessionStorage 读取（页面刷新后 JavaScript 变量已丢失，但 sessionStorage 还在）
+            const toolName = getPendingToolName() || pendingToolName;
+            const toolParams = getPendingToolParams() || pendingToolParams;
+            const history = getPendingHistory() || pendingHistory;
+
+            if (!toolName) return;
+
+            // 🚀 容错守卫：如果记忆为空，发出警告（Agent 会失忆）
+            if (!history) {
+                term.writeln(`${colors.red}\r\n>>> [WARNING] 历史上下文为空，Agent 将失忆！建议取消后重新执行任务。${colors.reset}\r\n`);
+            }
+
+            hideAuthButton();
+
+            term.writeln(`\r\n${colors.cyan}>>> 正在提交授权: ${toolName}${colors.reset}\r\n`);
+
+            try {
+                const response = await fetch('http://127.0.0.1:8080/api/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        task: "继续执行",
+                        session_id: sessionId,
+                        resume_tool_name: toolName,
+                        resume_tool_params: toolParams,
+                        history_context: history  // 🚀 把记忆还给后端！
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.substring(6);
+                            if (dataStr === '[DONE]') {
+                                term.writeln(`\r\n${colors.green}>>> [SYSTEM] CONNECTION TERMINATED.${colors.reset}\r\n`);
+                                break;
+                            }
+                            try { renderLog(JSON.parse(dataStr)); }
+                            catch (e) { console.error("Parse Error:", e); }
+                        }
+                    }
+                }
+            } catch (error) {
+                term.writeln(`\r\n${colors.red}[FATAL ERROR] 授权执行失败: ${error.message}${colors.reset}\r\n`);
+            } finally {
+                execBtn.disabled = false;
+                execBtn.innerText = "INITIATE SEQUENCE [Enter]";
+                execBtn.style.color = "var(--neon-blue)";
+                execBtn.style.borderColor = "var(--neon-blue)";
+            }
+        }
+
+        function renderLog(data) {
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const prefix = `${colors.dim}[${time}]${colors.reset} `;
+
+            // 将所有换行符替换为终端认识的 \r\n
+            const safeContent = (data.content || '').replace(/\n/g, '\r\n    ');
+
+            switch (data.type) {
+                case 'start':
+                case 'loop_start':
+                    term.writeln(`${prefix}${colors.blue}${safeContent}${colors.reset}`);
+                    break;
+                case 'thought':
+                    term.writeln(`${prefix}${colors.white}[THINKING] ${safeContent}${colors.reset}`);
+                    break;
+                case 'action':
+                    const params = data.params ? JSON.stringify(data.params) : '{}';
+                    term.writeln(`${prefix}${colors.yellow}[ACTION EXECUTING] ${safeContent} => ${params}${colors.reset}`);
+                    break;
+                case 'observation':
+                    term.writeln(`${prefix}${colors.dim}[OBSERVATION]\r\n    ${safeContent}${colors.reset}`);
+                    break;
+                case 'final_answer':
+                    term.writeln(`\r\n${prefix}${colors.green}[MISSION ACCOMPLISHED]\r\n    ${safeContent}${colors.reset}`);
+                    break;
+                case 'error':
+                    term.writeln(`${prefix}${colors.red}[WARNING] ${safeContent}${colors.reset}`);
+                    break;
+                case 'confirmation_required':
+                    term.writeln(`\r\n${prefix}${colors.red}========================================${colors.reset}`);
+                    term.writeln(`${prefix}${colors.red}⚠ SECURITY ALERT: HIGH RISK OPERATION ⚠${colors.reset}`);
+                    term.writeln(`${prefix}${colors.red}========================================${colors.reset}`);
+                    term.writeln(`${prefix}${colors.yellow}${safeContent}${colors.reset}\r\n`);
+                    // 保存高危工具信息到 sessionStorage，防止页面刷新导致记忆丢失
+                    pendingToolName = data.tool_name;
+                    pendingToolParams = data.tool_params;
+                    pendingHistory = data.history_context || "";
+                    setPendingToolName(pendingToolName);
+                    setPendingToolParams(pendingToolParams);
+                    setPendingHistory(pendingHistory);
+                    term.writeln(`${colors.dim}>>> 若同意执行，请点击左侧控制面板的【授权执行】按钮。${colors.reset}\r\n`);
+                    showAuthButton();
+                    break;
+                default:
+                    term.writeln(`${prefix}${safeContent}`);
+            }
+        }
+    </script>
+</body>
+</html>

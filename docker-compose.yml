@@ -1,0 +1,57 @@
+services:
+  # 1. 业务大脑节点 (你的 OS Agent)
+  os-agent:
+    build: .
+    container_name: xfusion-agent
+    ports:
+      - "8080:8080"  # 🚀 将容器内的 8080 映射到宿主机的 8080
+    env_file:
+      - .env
+    environment:
+      # 赛场上，这里会自动指向下面那个 vllm 容器的内网地址
+      - LOCAL_VLLM_URL=http://vllm-engine:8000/v1/chat/completions
+      # 读取你本地 .env 文件里的旧电脑 IP 密码
+      - TARGET_HOST=${TARGET_HOST}
+      - TARGET_USER=${TARGET_USER}
+      - TARGET_PASSWORD=${TARGET_PASSWORD}
+      - TZ=Asia/Shanghai  # 🚀 强制容器内部使用中国标准时间
+    volumes:
+      # 把本地的代码映射进去，这样你在外面改代码，容器里直接生效
+      - .:/app
+      # DevOps 级存储隔离：RAG 知识库与审计日志持久化
+      - ./vector_db:/app/vector_db
+      - ./data:/app/data  # 🚀 挂载目录，绝对不会被误认为文件夹，且方便备份
+      # 🚀 挂载宿主机的时区文件（只读），实现内外时间完全同步
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    # 如果依赖 vLLM，可以取消下面两行的注释，强制让大模型先启动
+    # depends_on:
+    #   - vllm-engine
+
+  # 2. 算力引擎节点 (vLLM)
+  # 注意：由于你现在笔记本上没有下载几十个G的GLM模型，这部分我们先写好但不强制启动
+  vllm-engine:
+    image: vllm/vllm-openai:latest
+    container_name: xfusion-vllm
+    # 榨干显卡算力
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ipc: host
+    ports:
+      - "8000:8000"
+    volumes:
+      # 到了现场，把左边的路径改成官方提供的真实模型路径
+      - /path/to/official/glm-4-9b:/model
+    command: >
+      --model /model
+      --trust-remote-code
+      --served-model-name glm-4-9b
+      --max-model-len 4096
+      --dtype auto
+    # 我们先加上 profiles 配置，让它默认不启动，等你到了赛场或者下了模型再启动
+    profiles: ["gpu-ready"]

@@ -216,3 +216,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- xFusion OS Agent 专属定制防线 ---
+# 1. 密钥防护：防止本地私密环境配置误传
+.env
+*.env
+*.pem
+*.key
+
+# 2. 运行日志与数据库：防止本地调试的冗余数据污染仓库
+*.log
+*.sqlite3
+*.db
+history_logs/
+vector_db/
+data/
+
+# 3. 离线算力包：防止巨大的 Docker 镜像压缩包被误传（Git 不适合存大文件）
+*.tar
+*.tar.gz
