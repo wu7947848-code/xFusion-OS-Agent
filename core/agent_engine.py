@@ -105,7 +105,7 @@ class ReActAgent:
         yield {"status": "info", "step": 0, "type": "start", "content": f"接受任务: {user_task} | 探测环境: {env_info}"}
 
         # ★ 配合分级记忆：在初始化时把终极任务和环境死死锁进核心记忆里
-        memory = AgentMemory(core_task=user_task, env_info=env_info, max_history_turns=3)
+        memory = AgentMemory(core_task=user_task, env_info=env_info, max_history_turns=6)
         tools_schema = self._get_tool_schemas()
 
         # ★ 偷师 OS-Copilot：结构化的多角色系统法则
@@ -156,7 +156,7 @@ class ReActAgent:
                 yield {"status": "error", "step": step, "type": "error", "content": action_data["content"]}
                 break
 
-            if action_data["thought"]:
+            if action_data.get("thought"):
                 yield {"status": "success", "step": step, "type": "thought", "content": action_data["thought"]}
                 # 🚀 赛博朋克：终端输出 Agent 思考过程
                 print_cyber(f"\n🧠 [Agent 思考中]: {action_data['thought']}", ConsoleColors.MAGENTA)
@@ -348,12 +348,16 @@ if __name__ == "__main__":
         class SearchManualInput(BaseModel):
             query: str
 
+        class GetSystemLoadInput(BaseModel):
+            """获取系统负载探针 - 无需任何参数"""
+            pass
+
         # 注册探针工具（诊断）
         agent.register_tool(
             name="get_system_load",
             description="获取 CPU、内存、磁盘的全局状态",
             func=probes.get_system_load,
-            input_model=BaseModel
+            input_model=GetSystemLoadInput
         )
         agent.register_tool(
             name="check_port",

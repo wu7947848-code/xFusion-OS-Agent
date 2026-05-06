@@ -7,22 +7,66 @@ from dotenv import load_dotenv
 # 加载本地 .env 文件中的密钥
 load_dotenv()
 
+# ==================== 多 Provider 自动配置表 ====================
+# 决赛现场只需改 PROVIDER 环境变量即可秒级切换
+PROVIDER_CONFIG = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/anthropic",
+        "api_key_env": "DEEPSEEK_API_KEY",
+        "default_model": "deepseek-v4-flash",
+    },
+    "minimax": {
+        "base_url": "https://api.minimaxi.com/anthropic",
+        "api_key_env": "MINIMAX_API_KEY",
+        "default_model": "MiniMax-M2.7-highspeed",
+    },
+    "glm": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4/anthropic",
+        "api_key_env": "GLM_API_KEY",
+        "default_model": "glm-4-plus",
+    },
+    "qwen": {
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/anthropic",
+        "api_key_env": "QWEN_API_KEY",
+        "default_model": "qwen-max",
+    },
+    "kimi": {
+        "base_url": "https://api.moonshot.cn/anthropic",
+        "api_key_env": "KIMI_API_KEY",
+        "default_model": "moonshot-v1-8k",
+    },
+}
+
+
 class ModelRouter:
     def __init__(self):
-        # 从环境变量获取 API Keys
-        self.minimax_api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        # 读取 Provider（默认 deepseek-v4-flash）
+        provider = os.getenv("PROVIDER", "deepseek").lower()
+        config = PROVIDER_CONFIG.get(provider, PROVIDER_CONFIG["deepseek"])
 
-        # AsyncAnthropic 异步客户端 (MiniMax API 兼容)
+        # 优先用环境变量覆盖，其次用 Provider 默认值
+        self.base_url = os.getenv("ANTHROPIC_BASE_URL", config["base_url"])
+        self.cloud_model = os.getenv("CLOUD_MODEL", config["default_model"])
+        self.local_model = os.getenv("LOCAL_MODEL", "glm-4-9b")
+
+        # API Key：优先 ANTHROPIC_API_KEY，其次 Provider 专属 Key
+        self.api_key = (
+            os.getenv("ANTHROPIC_API_KEY") or
+            os.getenv(config["api_key_env"], "")
+        )
+
+        # AsyncAnthropic 异步客户端
         self.client = AsyncAnthropic(
-            base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic"),
-            api_key=self.minimax_api_key,
+            base_url=self.base_url,
+            api_key=self.api_key,
         )
 
         # 预留赛场上 DGX OS 终端的本地 vLLM 接口地址
         self.local_vllm_url = os.getenv("LOCAL_VLLM_URL", "http://localhost:8000/v1/chat/completions")
 
-        # 模型配置
-        self.cloud_model = "MiniMax-M2.7-highspeed"
+        print(f"[Router] Provider={provider} | Model={self.cloud_model} | BaseURL={self.base_url}")
+        if not self.api_key:
+            print("[Router] ⚠️  未检测到 API Key！请设置 ANTHROPIC_API_KEY 或对应 Provider 的环境变量。")
 
     async def generate_response(self, prompt: str, system_prompt: str = "你是一个强大的 OS Agent", is_sensitive: bool = False, tools: list = None) -> dict:
         """
@@ -50,46 +94,67 @@ class ModelRouter:
         """
         [异步版] 调用云端 API，原生支持 Tool Calling
         """
-        if not self.minimax_api_key:
-            return {"type": "error", "content": "ANTHROPIC_API_KEY not set"}
+        if not self.api_key:
+            return {"type": "error", "content": "API Key not set. 请设置 ANTHROPIC_API_KEY 或对应 Provider 的环境变量。"}
 
-        try:
-            # 组装请求参数
-            kwargs = {
-                "model": self.cloud_model,
-                "max_tokens": 1024,
-                "system": system_prompt,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,  # 降低温度，让工具调用更精准
-            }
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                # 组装请求参数
+                kwargs = {
+                    "model": self.cloud_model,
+                    "max_tokens": 4096,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,  # 降低温度，让工具调用更精准
+                }
 
-            # 如果有工具，则挂载工具
-            if tools:
-                kwargs["tools"] = tools
+                # 如果有工具，则挂载工具
+                if tools:
+                    kwargs["tools"] = tools
 
-            # 核心异步调用：await 释放主线程，服务不再卡死
-            response = await self.client.messages.create(**kwargs)
+                # 核心异步调用：await 释放主线程，服务不再卡死
+                response = await self.client.messages.create(**kwargs)
 
-            result = {"thought": "", "tool_name": "none", "tool_params": {}, "final_answer": ""}
+                result = {"thought": "", "tool_name": "none", "tool_params": {}, "final_answer": ""}
 
-            # Anthropic 规范：模型会返回多个 Block
-            for block in response.content:
-                if block.type == "text":
-                    # 文本块：要么是思考过程，要么是最终答案
-                    result["thought"] += block.text
-                elif block.type == "tool_use":
-                    # 工具调用块：API 官方保证了格式的绝对正确！
-                    result["tool_name"] = block.name
-                    result["tool_params"] = block.input
+                # Anthropic 规范：模型会返回多个 Block
+                for block in response.content:
+                    if block.type == "text":
+                        # 文本块：要么是思考过程，要么是最终答案
+                        result["thought"] += block.text
+                    elif block.type == "tool_use":
+                        # 工具调用块：API 官方保证了格式的绝对正确！
+                        result["tool_name"] = block.name
+                        result["tool_params"] = block.input
 
-            # 如果没有调用任何工具，说明它得出了最终结论
-            if result["tool_name"] == "none":
-                result["final_answer"] = result["thought"]
+                # 如果没有调用任何工具，说明它得出了最终结论
+                if result["tool_name"] == "none":
+                    result["final_answer"] = result["thought"]
 
-            return result
+                return result
 
-        except Exception as e:
-            return {"type": "error", "content": f"API 异步调用失败: {str(e)}"}
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    import asyncio
+                    await asyncio.sleep(1.0)
+                    continue
+                return {"type": "error", "content": f"API 异步调用失败（重试{max_retries}次后仍失败）: {str(e)}"}
+
+    @staticmethod
+    def _anthropic_tools_to_openai(anthropic_tools: list) -> list:
+        """将 Anthropic tool 格式转换为 OpenAI function calling 格式"""
+        openai_tools = []
+        for tool in anthropic_tools:
+            openai_tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {"type": "object", "properties": {}})
+                }
+            })
+        return openai_tools
 
     async def _call_local_vllm(self, prompt: str, system_prompt: str, tools: list = None) -> dict:
         """调用跑在 FusionXpark 上的本地 vLLM 模型"""
@@ -106,14 +171,14 @@ class ModelRouter:
             ]
 
             kwargs = {
-                "model": "glm-4-9b",  # 必须和 start_local_llm.sh 里的 served-model-name 一致
+                "model": self.local_model,  # 决赛现场可切换不同本地模型
                 "messages": messages,
                 "temperature": 0.1
             }
 
-            # 兼容本地模型的 Tools 调用 (假设本地模型支持 Function Calling)
+            # 将 Anthropic 格式工具定义转换为 OpenAI Function Calling 格式
             if tools:
-                kwargs["tools"] = tools
+                kwargs["tools"] = self._anthropic_tools_to_openai(tools)
 
             response = await client.chat.completions.create(**kwargs)
             choice = response.choices[0]

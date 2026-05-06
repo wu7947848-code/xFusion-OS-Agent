@@ -116,6 +116,11 @@ class ExecuteArbitraryShellInput(BaseModel):
     command: str = Field(..., description="需要在靶机上执行的 shell 命令")
     justification: str = Field(..., description="调用此工具的理由说明，用于审计追踪")
 
+class DockerOpsInput(BaseModel):
+    """容器急救箱：对指定 Docker 容器执行 restart/stop/logs/inspect/rm 操作"""
+    container_id: str = Field(..., description="Docker 容器名称或 ID，例如 nginx-prod 或 abc123def")
+    action: str = Field(..., description="操作类型，仅支持: restart, stop, logs, inspect, rm")
+
 def create_agent():
     """创建并配置 Agent"""
     ssh_client = RobustSSHClient(
@@ -203,6 +208,14 @@ def create_agent():
         description="【终极兜底工具】上帝模式。当你遇到了极其罕见的组件（如自研中间件），或者常规的 systemd 探针、日志探测完全查不到线索时，你可以调用此工具执行任意原生的 Linux Shell 命令（如 find, awk, 自定义脚本等）。注意：此工具极度危险，调用将触发警报并等待指挥官授权。",
         func=remediator.execute_arbitrary_shell,
         input_model=ExecuteArbitraryShellInput
+    )
+
+    # 注册 Docker 容器急救工具
+    agent.register_tool(
+        name="docker_ops",
+        description="Docker 容器急救箱。当微服务架构下某个容器挂了、频繁重启、或需要查看崩溃日志时使用。支持 restart（重启）、stop（停止）、logs（拉取最后50行日志，含 stderr）、inspect（查看容器详配）、rm（强制删除僵尸容器）。",
+        func=remediator.docker_ops,
+        input_model=DockerOpsInput
     )
 
     return ssh_client, agent, probes

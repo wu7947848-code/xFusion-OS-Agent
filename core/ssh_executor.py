@@ -53,35 +53,19 @@ class RobustSSHClient:
 
     def check_sudo_needs_password(self) -> bool:
         """
-        提前跑一个无害的 sudo -v 探针，探测靶机 sudo 是否需要密码。
+        用 sudo -n 非交互探针探测靶机 sudo 是否需要密码。
+        -n = non-interactive，如果需要密码则立即失败 (exit 1)，绝不阻塞。
         返回 True = 需要密码（盲注逻辑启用）；False = NOPASSWD（盲注逻辑禁用）。
         """
         try:
-            # 使用 get_pty=True 模拟真实 TTY 环境
-            stdin, stdout, stderr = self.conn.client.exec_command("sudo -v", get_pty=True)
-            # 如果 exec_command 没有抛出异常，立刻读取输出
-            # NOPASSWD 情况下 stdout 为空且立即返回；有密码时会阻塞等待输入
-            import time
-            start = time.time()
-            while time.time() - start < 5:
-                if stdout.channel.recv_ready():
-                    # 读取所有可用输出
-                    out = stdout.read().decode('utf-8', errors='ignore')
-                    err = stderr.read().decode('utf-8', errors='ignore')
-                    # NOPASSWD：输出里不会有 password 提示
-                    if "password" in (out + err).lower():
-                        self.sudo_needs_password = True
-                    else:
-                        self.sudo_needs_password = False
-                    print(f"[SSH Sudo Probe] NOPASSWD={not self.sudo_needs_password}")
-                    return self.sudo_needs_password
-                time.sleep(0.2)
-            # 超时 → 大概率是需要密码但我们没输入
-            self.sudo_needs_password = True
-            print("[SSH Sudo Probe] 超时，判定为需要密码")
-            return True
+            # 使用 Fabric run() 自带的 timeout，3 秒硬性熔断
+            result = self.conn.run("sudo -n true", hide=True, warn=True, timeout=3)
+            # exit 0 → NOPASSWD；exit 1 → 需要密码
+            self.sudo_needs_password = result.failed
+            print(f"[SSH Sudo Probe] NOPASSWD={not self.sudo_needs_password} (exit={result.return_code})")
+            return self.sudo_needs_password
         except Exception as e:
-            # 探针失败，降级为需要密码（盲注安全）
+            # 超时或网络异常 → 降级为需要密码（安全侧兜底）
             self.sudo_needs_password = True
             print(f"[SSH Sudo Probe] 探针异常，降级为需要密码: {e}")
             return True

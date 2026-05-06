@@ -59,7 +59,7 @@ logs:
 # 唤醒本地大模型
 vllm:
 	@echo "$(GREEN)[+] 正在点燃 vLLM 算力引擎...$(RESET)"
-	bash start_local_llm.sh
+	bash deploy/start_local_llm.sh
 
 # 物理级清洗（重置环境）
 clean-data:

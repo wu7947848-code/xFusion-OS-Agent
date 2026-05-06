@@ -23,7 +23,8 @@ class SystemRemediator:
 
         if result["status"] == "success":
             return f"成功发送结束信号 ({signal}) 给进程 {pid}。"
-        return f"结束进程 {pid} 失败: {result['stderr']}"
+        err_detail = result.get('stderr') or result.get('stdout') or result.get('message') or '无错误输出，请检查 PID 是否存在或是否有权限'
+        return f"结束进程 {pid} 失败: {err_detail}"
 
     def restart_service(self, service_name: str) -> str:
         """
@@ -45,7 +46,8 @@ class SystemRemediator:
                  return f"服务 {service_name} 已成功重启并处于 active 状态。"
             return f"服务 {service_name} 重启命令已发送，但当前状态异常: {status_check['stdout']} {status_check['stderr']}"
 
-        return f"重启服务 {service_name} 失败: {result['stderr']}"
+        err_detail = result.get('stderr') or result.get('stdout') or '无错误输出，请检查服务名是否正确或使用 journalctl -u 排查'
+        return f"重启服务 {service_name} 失败: {err_detail}"
 
     def docker_ops(self, container_id: str, action: str) -> str:
         """
@@ -113,9 +115,9 @@ class SystemRemediator:
             wrapped_cmd = f"sudo sh -c '{command}'"
             try:
                 paramiko_client = self.ssh.conn.client
-                stdin, stdout, stderr = paramiko_client.exec_command(wrapped_cmd, get_pty=False)
-                out = stdout.read().decode('utf-8').strip()
-                err = stderr.read().decode('utf-8').strip()
+                stdin, stdout, stderr = paramiko_client.exec_command(wrapped_cmd, get_pty=False, timeout=15)
+                out = stdout.read().decode('utf-8', errors='ignore').strip()
+                err = stderr.read().decode('utf-8', errors='ignore').strip()
                 if err:
                     return f"执行报错: {err}"
                 return out or "操作已成功执行 (无输出)。"
@@ -133,14 +135,14 @@ class SystemRemediator:
         try:
             # 获取底层 Paramiko client
             paramiko_client = self.ssh.conn.client
-            stdin, stdout, stderr = paramiko_client.exec_command(wrapped_cmd, get_pty=False)
+            stdin, stdout, stderr = paramiko_client.exec_command(wrapped_cmd, get_pty=False, timeout=15)
 
             # 🚀 初赛神级逻辑：向 stdin 加密通道里塞入字节流密码并回车
             stdin.write(pwd + '\n')
             stdin.flush()
 
-            out = stdout.read().decode('utf-8').strip()
-            err = stderr.read().decode('utf-8').strip()
+            out = stdout.read().decode('utf-8', errors='ignore').strip()
+            err = stderr.read().decode('utf-8', errors='ignore').strip()
 
             # 清理可能的 [sudo] password for root: 提示信息
             err_clean = err.replace(f"[sudo] password for {self.ssh.user}:", "").strip()
